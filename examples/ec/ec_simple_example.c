@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <stdint.h>
 #include "erasure_code.h"	// use <isa-l.h> instead when linking against installed
 
 #define MMAX 255
@@ -49,6 +50,13 @@ int usage(void)
 		"  -e <val>  Simulate erasure on frag index val. Zero based. Can be repeated.\n"
 		"  -r <seed> Pick random (k, p) with seed\n");
 	exit(0);
+}
+
+#define CPU_FREQ (2.1) // hard-coded, depending on your own machine 
+uint64_t rdtsc(){
+    unsigned int lo,hi;
+    __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+    return ((uint64_t)hi << 32) | lo;
 }
 
 static int gf_gen_decode_matrix_simple(u8 * encode_matrix,
@@ -177,7 +185,15 @@ int main(int argc, char *argv[])
 	ec_init_tables(k, p, &encode_matrix[k * k], g_tbls);
 
 	// Generate EC parity blocks from sources
-	ec_encode_data(len, k, p, g_tbls, frag_ptrs, &frag_ptrs[k]);
+    uint64_t start_cycle = rdtsc();
+    int num_iters = 1;
+    for(int i = 0; i < num_iters; i++){
+    	ec_encode_data(len, k, p, g_tbls, frag_ptrs, &frag_ptrs[k]);
+    }
+    uint64_t end_cycle = rdtsc();
+
+    double elapsed_time = (end_cycle - start_cycle) * 1.0 / num_iters / CPU_FREQ;
+    printf("elapsed time = %.02lf ns, speed: %.02lf MB/s\n", elapsed_time, len * k * 1.0 / (1024 * 1024) / (elapsed_time * 1e-9));
 
 	if (nerrs <= 0)
 		return 0;
