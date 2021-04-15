@@ -154,13 +154,36 @@ int main(int argc, char *argv[])
 		printf("Test failure! Error with malloc\n");
 		return -1;
 	}
-	// Allocate the src & parity buffers
-	for (i = 0; i < m; i++) {
-		if (NULL == (frag_ptrs[i] = malloc(len))) {
-			printf("alloc error: Fail\n");
-			return -1;
-		}
-	}
+
+#define FILE_SIZE (1 << 30)
+
+    if(FILE_SIZE % k != 0){
+        printf("FILE_SIZE errors\n");
+		return -1;
+    }
+
+    u8* data = malloc(FILE_SIZE / k * m);
+    if(NULL == data){
+		printf("alloc error: Fail\n");
+		return -1;
+    }
+    // u8* recover_data = malloc(FILE_SIZE / k * p);
+    // if(NULL == recover_data){
+	// 	printf("alloc error: Fail\n");
+	// 	return -1;
+    // }
+    // fill the src data
+    for(int i = 0; i < FILE_SIZE; i += 4){
+        *(uint32_t*)&data[i] = rand();
+    }
+
+	// // Allocate the src & parity buffers
+	// for (i = 0; i < m; i++) {
+	// 	if (NULL == (frag_ptrs[i] = malloc(len))) {
+	// 		printf("alloc error: Fail\n");
+	// 		return -1;
+	// 	}
+	// }
 
 	// Allocate buffers for recovered data
 	for (i = 0; i < p; i++) {
@@ -170,10 +193,10 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	// Fill sources with random data
-	for (i = 0; i < k; i++)
-		for (j = 0; j < len; j++)
-			frag_ptrs[i][j] = rand();
+	// // Fill sources with random data
+	// for (i = 0; i < k; i++)
+	// 	for (j = 0; j < len; j++)
+	// 		frag_ptrs[i][j] = rand();
 
 	printf(" encode (m,k,p)=(%d,%d,%d) len=%d\n", m, k, p, len);
 
@@ -186,14 +209,22 @@ int main(int argc, char *argv[])
 
 	// Generate EC parity blocks from sources
     uint64_t start_cycle = rdtsc();
-    int num_iters = 1;
-    for(int i = 0; i < num_iters; i++){
+    uint32_t page_size = len * k;
+    uint32_t parity_size = len * p;
+    int num_pages = FILE_SIZE / page_size;
+    for(int i = 0; i < num_pages; i++){
+        for(int x = 0; x < k; x++){
+            frag_ptrs[x] = &data[i * page_size + x * len];
+        }
+        for(int x = 0; x < p; x++){
+            frag_ptrs[x + k] = &data[FILE_SIZE + i * parity_size + x * len];
+        }
     	ec_encode_data(len, k, p, g_tbls, frag_ptrs, &frag_ptrs[k]);
     }
     uint64_t end_cycle = rdtsc();
 
-    double elapsed_time = (end_cycle - start_cycle) * 1.0 / num_iters / CPU_FREQ;
-    printf("elapsed time = %.02lf ns, speed: %.02lf MB/s\n", elapsed_time, len * k * 1.0 / (1024 * 1024) / (elapsed_time * 1e-9));
+    double elapsed_time = (end_cycle - start_cycle) * 1.0 / CPU_FREQ / 1000;
+    printf("encoding time = %.02lf ms, speed: %.02lf MB/s\n", elapsed_time / 1000, FILE_SIZE / (1024 * 1024) / (elapsed_time * 1e-6));
 
 	if (nerrs <= 0)
 		return 0;
@@ -211,8 +242,8 @@ int main(int argc, char *argv[])
 	// Pack recovery array pointers as list of valid fragments
 	for (i = 0; i < k; i++)
 		recover_srcs[i] = frag_ptrs[decode_index[i]];
-
-	// Recover data
+	
+    // Recover data
 	ec_init_tables(k, nerrs, decode_matrix, g_tbls);
 	ec_encode_data(len, k, nerrs, g_tbls, recover_srcs, recover_outp);
 
