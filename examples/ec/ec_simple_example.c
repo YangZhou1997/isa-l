@@ -155,8 +155,10 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-    // run it:  ./ec_simple_example -k 8 -p 2 -l 512
-    
+    // run it:  
+    // 4kB page: ./ec_simple_example -k 8 -p 2 -l 512
+    // 2MB page: ./ec_simple_example -k 8 -p 2 -l 262144
+
 #define FILE_SIZE (1 << 30)
 
     if(FILE_SIZE % k != 0){
