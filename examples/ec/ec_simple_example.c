@@ -180,7 +180,7 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-#define FILE_SIZE (30ULL << 30)
+#define FILE_SIZE (15ULL << 30)
 
     if(FILE_SIZE % (page_size * k) != 0){
         printf("FILE_SIZE errors\n");
