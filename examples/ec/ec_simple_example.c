@@ -59,8 +59,9 @@ int usage(void)
 // build it: 
 // make
 // run it:  
-// 4kB page: ./ec_simple_example -k 8 -p 2 -l 4096
-// 2MB page: ./ec_simple_example -k 8 -p 2 -l 2097152
+// 4kB page: ./ec_simple_example -k 3 -p 2 -l 4096
+// 32kB page: ./ec_simple_example -k 3 -p 2 -l 32768
+// 2MB page: ./ec_simple_example -k 3 -p 2 -l 2097152
 
 
 #define CPU_FREQ (2.1) // hard-coded, depending on your own machine 
