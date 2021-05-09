@@ -32,7 +32,8 @@
 #include <string.h>
 #include <getopt.h>
 #include <stdint.h>
-#include "erasure_code.h"	// use <isa-l.h> instead when linking against installed
+// #include "erasure_code.h"	// use <isa-l.h> instead when linking against installed
+#include "isa-l.h"	// use <isa-l.h> instead when linking against installed
 
 #define MMAX 255
 #define KMAX 255
@@ -51,6 +52,13 @@ int usage(void)
 		"  -r <seed> Pick random (k, p) with seed\n");
 	exit(0);
 }
+
+// build it: 
+// make
+// run it:  
+// 4kB page: ./ec_simple_example -k 8 -p 2 -l 512
+// 2MB page: ./ec_simple_example -k 8 -p 2 -l 262144
+
 
 #define CPU_FREQ (2.1) // hard-coded, depending on your own machine 
 uint64_t rdtsc(){
@@ -154,10 +162,6 @@ int main(int argc, char *argv[])
 		printf("Test failure! Error with malloc\n");
 		return -1;
 	}
-
-    // run it:  
-    // 4kB page: ./ec_simple_example -k 8 -p 2 -l 512
-    // 2MB page: ./ec_simple_example -k 8 -p 2 -l 262144
 
 #define FILE_SIZE (1 << 30)
 
