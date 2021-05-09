@@ -32,6 +32,9 @@
 #include <string.h>
 #include <getopt.h>
 #include <stdint.h>
+#include <linux/mman.h>
+#include <sys/mman.h>
+#include <assert.h>
 // #include "erasure_code.h"	// use <isa-l.h> instead when linking against installed
 #include "isa-l.h"	// use <isa-l.h> instead when linking against installed
 
@@ -47,7 +50,7 @@ int usage(void)
 		"  -h        Help\n"
 		"  -k <val>  Number of source fragments\n"
 		"  -p <val>  Number of parity fragments\n"
-		"  -l <val>  Length of fragments\n"
+		"  -l <val>  page_sizegth of fragments\n"
 		"  -e <val>  Simulate erasure on frag index val. Zero based. Can be repeated.\n"
 		"  -r <seed> Pick random (k, p) with seed\n");
 	exit(0);
@@ -56,8 +59,8 @@ int usage(void)
 // build it: 
 // make
 // run it:  
-// 4kB page: ./ec_simple_example -k 8 -p 2 -l 512
-// 2MB page: ./ec_simple_example -k 8 -p 2 -l 262144
+// 4kB page: ./ec_simple_example -k 8 -p 2 -l 4096
+// 2MB page: ./ec_simple_example -k 8 -p 2 -l 2097152
 
 
 #define CPU_FREQ (2.1) // hard-coded, depending on your own machine 
@@ -67,6 +70,11 @@ uint64_t rdtsc(){
     return ((uint64_t)hi << 32) | lo;
 }
 
+#define kHugepage2MSize (2 << 20)
+static uint64_t round_to_hugepage_size(uint64_t size) {
+  return ((size - 1) / kHugepage2MSize + 1) * kHugepage2MSize;
+}
+
 static int gf_gen_decode_matrix_simple(u8 * encode_matrix,
 				       u8 * decode_matrix,
 				       u8 * invert_matrix,
@@ -74,10 +82,18 @@ static int gf_gen_decode_matrix_simple(u8 * encode_matrix,
 				       u8 * decode_index,
 				       u8 * frag_err_list, int nerrs, int k, int m);
 
+static void *allocate_hugepage_persistent(uint64_t size) {
+  size = round_to_hugepage_size(size);
+  void *ptr = NULL;
+  ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|MAP_HUGE_2MB, -1, 0);
+  assert(ptr != MAP_FAILED);
+  return ptr;
+}
+
 int main(int argc, char *argv[])
 {
 	int i, j, m, c, e, ret;
-	int k = 10, p = 4, len = 8 * 1024;	// Default params
+	int k = 10, p = 4, page_size = 4096;	// Default params
 	int nerrs = 0;
 
 	// Fragment buffer pointers
@@ -105,8 +121,8 @@ int main(int argc, char *argv[])
 			p = atoi(optarg);
 			break;
 		case 'l':
-			len = atoi(optarg);
-			if (len < 0)
+			page_size = atoi(optarg);
+			if (page_size < 0)
 				usage();
 			break;
 		case 'e':
@@ -163,14 +179,14 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-#define FILE_SIZE (1 << 30)
+#define FILE_SIZE (3ULL << 30)
 
-    if(FILE_SIZE % k != 0){
+    if(FILE_SIZE % (page_size * k) != 0){
         printf("FILE_SIZE errors\n");
 		return -1;
     }
 
-    u8* data = malloc(FILE_SIZE / k * m);
+    u8* data = allocate_hugepage_persistent(FILE_SIZE / k * m);
     if(NULL == data){
 		printf("alloc error: Fail\n");
 		return -1;
@@ -181,13 +197,13 @@ int main(int argc, char *argv[])
 	// 	return -1;
     // }
     // fill the src data
-    for(int i = 0; i < FILE_SIZE; i += 4){
+    for(uint64_t i = 0; i < FILE_SIZE; i += 4){
         *(uint32_t*)&data[i] = rand();
     }
 
 	// // Allocate the src & parity buffers
 	// for (i = 0; i < m; i++) {
-	// 	if (NULL == (frag_ptrs[i] = malloc(len))) {
+	// 	if (NULL == (frag_ptrs[i] = malloc(page_size))) {
 	// 		printf("alloc error: Fail\n");
 	// 		return -1;
 	// 	}
@@ -195,7 +211,7 @@ int main(int argc, char *argv[])
 
 	// Allocate buffers for recovered data
 	for (i = 0; i < p; i++) {
-		if (NULL == (recover_outp[i] = malloc(len))) {
+		if (NULL == (recover_outp[i] = malloc(page_size))) {
 			printf("alloc error: Fail\n");
 			return -1;
 		}
@@ -203,10 +219,10 @@ int main(int argc, char *argv[])
 
 	// // Fill sources with random data
 	// for (i = 0; i < k; i++)
-	// 	for (j = 0; j < len; j++)
+	// 	for (j = 0; j < page_size; j++)
 	// 		frag_ptrs[i][j] = rand();
 
-	printf(" encode (m,k,p)=(%d,%d,%d) len=%d\n", m, k, p, len);
+	printf(" encode (m,k,p)=(%d,%d,%d) page_size=%d\n", m, k, p, page_size);
 
 	// Pick an encode matrix. A Cauchy matrix is a good choice as even
 	// large k are always invertable keeping the recovery rule simple.
@@ -217,17 +233,17 @@ int main(int argc, char *argv[])
 
 	// Generate EC parity blocks from sources
     uint64_t start_cycle = rdtsc();
-    uint32_t page_size = len * k;
-    uint32_t parity_size = len * p;
-    int num_pages = FILE_SIZE / page_size;
-    for(int i = 0; i < num_pages; i++){
+    uint32_t page_size_k = page_size * k;
+    uint32_t parity_size_p = page_size * p;
+    uint64_t num_pages = FILE_SIZE / page_size_k;
+    for(uint64_t i = 0; i < num_pages; i++){
         for(int x = 0; x < k; x++){
-            frag_ptrs[x] = &data[i * page_size + x * len];
+            frag_ptrs[x] = &data[i * page_size_k + x * page_size];
         }
         for(int x = 0; x < p; x++){
-            frag_ptrs[x + k] = &data[FILE_SIZE + i * parity_size + x * len];
+            frag_ptrs[x + k] = &data[FILE_SIZE + i * parity_size_p + x * page_size];
         }
-    	ec_encode_data(len, k, p, g_tbls, frag_ptrs, &frag_ptrs[k]);
+    	ec_encode_data(page_size, k, p, g_tbls, frag_ptrs, &frag_ptrs[k]);
     }
     uint64_t end_cycle = rdtsc();
 
@@ -253,13 +269,13 @@ int main(int argc, char *argv[])
 	
     // Recover data
 	ec_init_tables(k, nerrs, decode_matrix, g_tbls);
-	ec_encode_data(len, k, nerrs, g_tbls, recover_srcs, recover_outp);
+	ec_encode_data(page_size, k, nerrs, g_tbls, recover_srcs, recover_outp);
 
 	// Check that recovered buffers are the same as original
 	printf(" check recovery of block {");
 	for (i = 0; i < nerrs; i++) {
 		printf(" %d", frag_err_list[i]);
-		if (memcmp(recover_outp[i], frag_ptrs[frag_err_list[i]], len)) {
+		if (memcmp(recover_outp[i], frag_ptrs[frag_err_list[i]], page_size)) {
 			printf(" Fail erasure recovery %d, frag %d\n", i, frag_err_list[i]);
 			return -1;
 		}
