@@ -35,6 +35,7 @@
 #include <linux/mman.h>
 #include <sys/mman.h>
 #include <assert.h>
+#include <time.h>
 // #include "erasure_code.h"	// use <isa-l.h> instead when linking against installed
 #include "isa-l.h"	// use <isa-l.h> instead when linking against installed
 
@@ -64,16 +65,37 @@ int usage(void)
 // 2MB page: ./ec_simple_example -k 3 -p 2 -l 2097152
 
 
-#define CPU_FREQ (2.1) // hard-coded, depending on your own machine 
+#define CPU_FREQ (2.6) // hard-coded, depending on your own machine 
 uint64_t rdtsc(){
     unsigned int lo,hi;
     __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
     return ((uint64_t)hi << 32) | lo;
 }
 
+int64_t timespecDiff(struct timespec *timeA_p, struct timespec *timeB_p)
+{
+  return ((timeA_p->tv_sec * 1000000000) + timeA_p->tv_nsec) -
+           ((timeB_p->tv_sec * 1000000000) + timeB_p->tv_nsec);
+}
+
 #define kHugepage2MSize (2 << 20)
 static uint64_t round_to_hugepage_size(uint64_t size) {
   return ((size - 1) / kHugepage2MSize + 1) * kHugepage2MSize;
+}
+static void *allocate_hugepage_persistent(uint64_t size) {
+  size = round_to_hugepage_size(size);
+  void *ptr = NULL;
+  ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|MAP_HUGE_2MB, -1, 0);
+  assert(ptr != MAP_FAILED);
+  return ptr;
+}
+
+static void *my_malloc(uint64_t size) {
+#ifdef USING_HG
+    return allocate_hugepage_persistent(size);
+#else
+    return malloc(size);
+#endif
 }
 
 static int gf_gen_decode_matrix_simple(u8 * encode_matrix,
@@ -82,14 +104,6 @@ static int gf_gen_decode_matrix_simple(u8 * encode_matrix,
 				       u8 * temp_matrix,
 				       u8 * decode_index,
 				       u8 * frag_err_list, int nerrs, int k, int m);
-
-static void *allocate_hugepage_persistent(uint64_t size) {
-  size = round_to_hugepage_size(size);
-  void *ptr = NULL;
-  ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_HUGETLB|MAP_HUGE_2MB, -1, 0);
-  assert(ptr != MAP_FAILED);
-  return ptr;
-}
 
 int main(int argc, char *argv[])
 {
@@ -168,11 +182,11 @@ int main(int argc, char *argv[])
 	printf("ec_simple_example:\n");
 
 	// Allocate coding matrices
-	encode_matrix = malloc(m * k);
-	decode_matrix = malloc(m * k);
-	invert_matrix = malloc(m * k);
-	temp_matrix = malloc(m * k);
-	g_tbls = malloc(k * p * 32);
+	encode_matrix = my_malloc(m * k);
+	decode_matrix = my_malloc(m * k);
+	invert_matrix = my_malloc(m * k);
+	temp_matrix = my_malloc(m * k);
+	g_tbls = my_malloc(k * p * 32);
 
 	if (encode_matrix == NULL || decode_matrix == NULL
 	    || invert_matrix == NULL || temp_matrix == NULL || g_tbls == NULL) {
@@ -187,12 +201,12 @@ int main(int argc, char *argv[])
 		return -1;
     }
 
-    u8* data = allocate_hugepage_persistent(FILE_SIZE / k * m);
+    u8* data = my_malloc(FILE_SIZE / k * m);
     if(NULL == data){
 		printf("alloc error: Fail\n");
 		return -1;
     }
-    // u8* recover_data = malloc(FILE_SIZE / k * p);
+    // u8* recover_data = my_malloc(FILE_SIZE / k * p);
     // if(NULL == recover_data){
 	// 	printf("alloc error: Fail\n");
 	// 	return -1;
@@ -204,7 +218,7 @@ int main(int argc, char *argv[])
 
 	// // Allocate the src & parity buffers
 	// for (i = 0; i < m; i++) {
-	// 	if (NULL == (frag_ptrs[i] = malloc(page_size))) {
+	// 	if (NULL == (frag_ptrs[i] = my_malloc(page_size))) {
 	// 		printf("alloc error: Fail\n");
 	// 		return -1;
 	// 	}
@@ -212,7 +226,7 @@ int main(int argc, char *argv[])
 
 	// Allocate buffers for recovered data
 	for (i = 0; i < p; i++) {
-		if (NULL == (recover_outp[i] = malloc(page_size))) {
+		if (NULL == (recover_outp[i] = my_malloc(page_size))) {
 			printf("alloc error: Fail\n");
 			return -1;
 		}
@@ -233,7 +247,8 @@ int main(int argc, char *argv[])
 	ec_init_tables(k, p, &encode_matrix[k * k], g_tbls);
 
 	// Generate EC parity blocks from sources
-    uint64_t start_cycle = rdtsc();
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
     uint32_t page_size_k = page_size * k;
     uint32_t parity_size_p = page_size * p;
     uint64_t num_pages = FILE_SIZE / page_size_k;
@@ -246,9 +261,8 @@ int main(int argc, char *argv[])
         }
     	ec_encode_data(page_size, k, p, g_tbls, frag_ptrs, &frag_ptrs[k]);
     }
-    uint64_t end_cycle = rdtsc();
-
-    double elapsed_time = (end_cycle - start_cycle) * 1.0 / CPU_FREQ / 1000;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double elapsed_time = timespecDiff(&end, &start) * 1.0 / 1000;
     printf("encoding time = %.02lf ms, speed: %.02lf MB/s\n", elapsed_time / 1000, FILE_SIZE / (1024 * 1024) / (elapsed_time * 1e-6));
 
 	if (nerrs <= 0)
